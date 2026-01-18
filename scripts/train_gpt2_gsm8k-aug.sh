@@ -1,10 +1,10 @@
-SAVE_DIR=/etc/ssd1/chenben03/llmesearch_v2/codi_learn
+SAVE_DIR=/etc/ssd1/chenben03/LLM_learn/CODI_learning/trained_model
 
 mkdir -p "$SAVE_DIR"
 
 python train.py \
 	--output_dir "$SAVE_DIR" \
-  	--expt_name gsm8k_llama1b_latent_baseline \
+  	--expt_name gsm8k_gpt2_latent_baseline \
 	--logging_dir "$SAVE_DIR/logs"\
 	--logging_steps 10 \
 	--model_name_or_path gpt2 \

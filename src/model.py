@@ -117,6 +117,12 @@ class TrainingArguments(transformers.TrainingArguments):
     max_token_num: int = field(default=1000, metadata={"help": "Limit the longest data to avoid OOM."})
 
 def print_trainable_parameters(model):
+    # 原始gpt2参数为:                trainable params: 39422208 || all params: 81972480 || trainable%: 48.09200356021923
+    # 原始gpt2 +3 token参数为:       trainable params: 39424512 || all params: 81974784 || trainable%: 48.09346249695516
+    # gpt2+lora参数为:              trainable params: 18874368 || all params: 100849152 || trainable%: 18.715445420899524
+    # model prj参数为:              trainable params: 1182720 || all params: 1182720 || trainable%: 100.0
+    # CODI (gpt2+lora + prj)参数为: trainable params: 20057088 || all params: 144499200 || trainable%: 13.880414562848792
+    # CODI (gpt2+lora + prj) - gpt2+lora - prj 多出来的参数为: 
     trainable_parameters = 0
     all_param = 0
     for name, param in model.named_parameters():

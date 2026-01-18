@@ -58,10 +58,10 @@ def evaluation(model_args, data_args, training_args):
         lora_config = LoraConfig(
             task_type=task_type,
             inference_mode=False,
-            r=model_args.lora_r,
-            lora_alpha=model_args.lora_alpha,
-            lora_dropout=0.1,
-            target_modules=target_modules,
+            r=model_args.lora_r,                    # 控制lora rank大小，值越大参数量越多，拟合能力越强	
+            lora_alpha=model_args.lora_alpha,       # 缩放新增参数的梯度，避免原始权重被剧烈扰动
+            lora_dropout=0.1,                       # 在LoRA层添加Dropout防止微调过拟合
+            target_modules=target_modules,          # 指定哪些层添加LoRA（冻结其他层参数）
             init_lora_weights=True,
         )
     else:
@@ -72,6 +72,7 @@ def evaluation(model_args, data_args, training_args):
     #if "llama" in model_args.model_name_or_path:
     #    model.codi.resize_token_embeddings(128261)
 
+    # 千万注意！！！这里加载的参数是已经包含了prj的参数的，也就是CODI这个类中包含的所有参数
     try:
         state_dict = load_file(os.path.join(model_args.ckpt_dir, "model.safetensors"))
     except Exception:
@@ -88,7 +89,7 @@ def evaluation(model_args, data_args, training_args):
     tokenizer = transformers.AutoTokenizer.from_pretrained(
         tokenizer_path,
         token=model_args.token,
-        model_max_length=training_args.model_max_length,    # 512
+        model_max_length=training_args.model_max_length,    # tokenizer编码长度, 512 for gpt2
         padding_side="left",
         use_fast=False,
     )
@@ -185,9 +186,9 @@ def evaluation(model_args, data_args, training_args):
             )
         
         # remove_eos: Do not add <eos> as a delimiter to split QA.
-        if training_args.remove_eos:
+        if training_args.remove_eos:    # shape: (128, 1)
             bot_tensor = torch.tensor([model.bot_id], dtype=torch.long).expand(batch["input_ids"].size(0), 1)
-        else:
+        else:   # shape: (128, 1)
             bot_tensor = torch.tensor([tokenizer.eos_token_id, model.bot_id], dtype=torch.long).expand(batch["input_ids"].size(0), 2)
         batch["input_ids"] = torch.cat((batch["input_ids"], bot_tensor), dim=1)
         batch["attention_mask"] = torch.cat((batch["attention_mask"], torch.ones_like(bot_tensor)), dim=1)
@@ -236,25 +237,26 @@ def evaluation(model_args, data_args, training_args):
                 latent_embd = outputs.hidden_states[-1][:, -1, :].unsqueeze(1)
                 
                 if training_args.use_prj:
-                    latent_embd = model.prj(latent_embd)
+                    latent_embd = model.prj(latent_embd)    # [128, 1, 768]
 
             if training_args.remove_eos:    # shape (1,1,768) 此时是未训练的eot emb
                 eot_emb = model.get_embd(model.codi, model.model_name)(torch.tensor([model.eot_id], dtype=torch.long, device='cuda')).unsqueeze(0).to(device)
             else:   # shape (1,2,768)
                 eot_emb = model.get_embd(model.codi, model.model_name)(torch.tensor([model.eot_id, tokenizer.eos_token_id], dtype=torch.long, device='cuda')).unsqueeze(0).to(device)
             
-            eot_emb = eot_emb.expand(batch["input_ids"].size(0), -1, -1)    # [128, 2, 768]
+            # 这里经过严格的参数验证, 每一个模型的eot_emb均是一样的, 都是模型未训练前初始化的eot emb!!!!
+            eot_emb = eot_emb.expand(batch["input_ids"].size(0), -1, -1)    # [128, 1, 768]
 
-            output = eot_emb
+            output = eot_emb    # [128, 1, 768], 都是模型未训练前初始化的eot emb!!!!
             
             seq_len = 0
             finished = torch.zeros(batch_size, dtype=torch.bool, device="cuda")  # Track EOS for each sequence [128,]
             pred_tokens = [[] for _ in range(batch_size)]
             for i in range(gen_kwargs["max_new_tokens"]):       # 256
                 seq_len += 1
-
+                # 使用 inputs_embeds 时需强制启用缓存, generation_config.use_cache = True, 因此输入eot均是一样的，但是结果不一致,表示每个cash在计算
                 out = model.codi(
-                        inputs_embeds=output,   # [128, 2, 768]
+                        inputs_embeds=output,   # [128, 1, 768]
                         output_hidden_states=False,
                         attention_mask=None,
                         use_cache=True,

@@ -55,7 +55,7 @@ def print_trainable_parameters(model):
     )
     # for name, param in model.named_parameters():
     #     if param.requires_grad:
-    #         print('the require_grad name is: {}, and the param shape is: {}'.format(name, param.shape))
+    #         print('the require_grad name is: {}, and the param is: {}'.format(name, param.shape))
 
 
 model = transformers.AutoModelForCausalLM.from_pretrained(

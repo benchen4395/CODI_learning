@@ -117,7 +117,7 @@ def train():
     #       Peft Model       #
     ##########################
     if model_args.lora_init:
-        task_type = TaskType.CAUSAL_LM  ## 
+        task_type = TaskType.CAUSAL_LM  
         if any(name in model_args.model_name_or_path.lower() for name in ["llama", "mistral", "falcon", "qwen"]):
             target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "up_proj", "down_proj", "gate_proj"]
         elif any(name in model_args.model_name_or_path.lower() for name in ["phi"]):
@@ -137,13 +137,14 @@ def train():
             init_lora_weights=True,
         )
 
-
+    # 定义初始化模型
     model = CODI(model_args, training_args, lora_config)
+    # 
     tokenizer = transformers.AutoTokenizer.from_pretrained(
             model_args.model_name_or_path,
-            token=model_args.token,
+            token=model_args.token,             # "HF token to access to private models, e.g., meta-llama"
             cache_dir=training_args.cache_dir,
-            model_max_length=training_args.model_max_length,
+            model_max_length=training_args.model_max_length,    # tokenizer编码长度, 512 for gpt2
             padding_side="right",
             use_fast=False,
         )
