@@ -19,4 +19,4 @@ python test.py \
 	--inf_num_iterations 1 \
 	--remove_eos True \
 	--use_lora True \
-	--ckpt_dir /etc/ssd1/chenben03/transformers/models		# 加载训练好的模型路径
+	--ckpt_dir /etc/ssd1/chenben03/LLM_learn/CODI_learning/pretrained_model/codi-gpt2		# 加载训练好的模型路径

@@ -238,7 +238,7 @@ def evaluation(model_args, data_args, training_args):
                 if training_args.use_prj:
                     latent_embd = model.prj(latent_embd)
 
-            if training_args.remove_eos:    # shape (1,1,768)
+            if training_args.remove_eos:    # shape (1,1,768) 此时是未训练的eot emb
                 eot_emb = model.get_embd(model.codi, model.model_name)(torch.tensor([model.eot_id], dtype=torch.long, device='cuda')).unsqueeze(0).to(device)
             else:   # shape (1,2,768)
                 eot_emb = model.get_embd(model.codi, model.model_name)(torch.tensor([model.eot_id, tokenizer.eos_token_id], dtype=torch.long, device='cuda')).unsqueeze(0).to(device)

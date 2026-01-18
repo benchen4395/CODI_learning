@@ -1,16 +1,71 @@
 ##### step1: 加载模型
+import os
 import transformers
 import torch
 import torch.nn as nn
+from peft import (get_peft_model, PeftModel, PeftConfig, TaskType, LoraConfig)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# model_name = "openai-community/gpt2"
-model_name = 'zen-E/CODI-gpt2'
+pretrained_model = "openai-community/gpt2"
+model_name = "/etc/ssd1/chenben03/LLM_learn/CODI_learning/pretrained_model/codi-gpt2" #'zen-E/CODI-gpt2'
+
+# model configurations
+bf16 = True
+num_latent = 6
+use_lora = True
+lora_init = True
+lora_r = 128
+lora_alpha = 32
+model_max_length = 512
+
 
 # 1.1 加载模型和tokenizer切词
-model = transformers.AutoModelForCausalLM.from_pretrained(model_name).to(device)
-tokenizer = transformers.AutoTokenizer.from_pretrained(model_name, use_fast=False)
+if lora_init: # True
+    task_type = TaskType.CAUSAL_LM
+    if any(name in pretrained_model for name in ["llama", "mistral", "falcon", "qwen"]):
+        target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "up_proj", "down_proj", "gate_proj"]
+    elif any(name in pretrained_model for name in ["phi"]):
+        target_modules = ["q_proj", "k_proj", "v_proj", "dense", "fc1", "fc2"]
+    elif any(name in pretrained_model for name in ["gpt2"]):
+        target_modules = ["c_attn", "c_proj", 'c_fc']
+    else:
+        raise ValueError(f"Only support LLAMA, Mistral, Falcon, Phi-2, but got {pretrained_model}.")
+    lora_config = LoraConfig(
+        task_type=task_type,
+        inference_mode=False,
+        r=lora_r,
+        lora_alpha=lora_alpha,
+        lora_dropout=0.1,
+        target_modules=target_modules,
+        init_lora_weights=True,
+    )
+else:
+    raise NotImplementedError
 
+model = transformers.AutoModelForCausalLM.from_pretrained(
+            pretrained_model,
+            torch_dtype=(       # 注意：当使用量化时，相同参数影响的数据类型可能会被覆盖，因为量化有自己的数据类型设置, 优先级没有bnb_4bit_compute_dtype高
+                torch.float16 if bf16 is False else torch.bfloat16
+            ),
+            quantization_config=transformers.BitsAndBytesConfig(
+                load_in_4bit=True,      # 表示使用4位量化加载模型。这将把模型的权重转换为4位表示，从而大幅减少内存占用（约为原始精度的1/8)
+                bnb_4bit_compute_dtype=torch.bfloat16,  # 即使权重被量化为4位，但在计算（如矩阵乘法）之前需要反量化为更高精度的类型。这里设置为bfloat16，表示计算过程中使用bfloat16类型
+                bnb_4bit_use_double_quant=False,    # 是否对量化使用的量化常数（quantization constants）再次进行量化（双重量化）。双重量化可以进一步减少内存占用，但可能会略微增加量化误差。这里设置为False，表示不使用双重量化
+                bnb_4bit_quant_type='nf4', # 指定4位量化的数据类型。'nf4'代表4-bit NormalFloat，这是一种针对正态分布权重优化的量化数据类型，通常比标准的4位整数量化表现更好。另一种可选类型是'fp4'（4位浮点数）
+            )
+        )
+# tokenizer = transformers.AutoTokenizer.from_pretrained(pretrained_model, use_fast=False)
+tokenizer = transformers.AutoTokenizer.from_pretrained(
+        pretrained_model,
+        token=None,
+        model_max_length=model_max_length,    # 512
+        padding_side="left",
+        use_fast=False,
+    )
+
+# 配置模型参数
+ori_vocab_size = model.config.vocab_size    # 50257
+dim = model.config.hidden_size              # 768
 # 加载vocab词表
 vocab = tokenizer.get_vocab()  # token : id
 vocab_index = {v:k for k,v in vocab.items()}    # id : token
@@ -19,18 +74,21 @@ vocab_index = {v:k for k,v in vocab.items()}    # id : token
 # 设置pad_token, 一些模型没有预设，需要额外加载，并做好special_token的初始化
 if tokenizer.pad_token_id is None:
     tokenizer.add_special_tokens({'pad_token': '[PAD]'})
-model.pad_token_id = tokenizer.vocab_size
-model.bot_id = tokenizer.vocab_size + 1
-model.eot_id = tokenizer.vocab_size + 2
+    tokenizer.pad_token_id = ori_vocab_size
+bot_id = tokenizer.vocab_size + 1
+eot_id = tokenizer.vocab_size + 2
 # 初始化new_added_token_embedding的方法见文档: https://www.cs.columbia.edu/~johnhew/vocab-expansion.html
 model.resize_token_embeddings(tokenizer.vocab_size + 3)
+
+if use_lora:
+    model = get_peft_model(model, lora_config)
 
 # 1.3 构建模型映射层
 use_prj = True
 prj_no_ln = False
 prj_dim = 768
 prj_dropout = 0.0 # 模型测试时为空
-model_dim = model.config.hidden_size
+model_dim = model.config.hidden_size    # 768
 if use_prj:
     model_prj = nn.Sequential(
         nn.Dropout(prj_dropout),      # test时为0
@@ -43,7 +101,17 @@ if use_prj:
 
 model_prj = model_prj.to(device)
 
-##### step2: 加载切词
+##### step2: 加载预训练好的模型
+try:
+    state_dict = load_file(os.path.join(model_name, "model.safetensors"))
+except Exception:
+    state_dict = torch.load(os.path.join(model_name, "pytorch_model.bin"))
+# 将保存的模型参数（权重和偏置）加载到当前模型中, strict=True (默认): 严格模式, 要求state_dict中的键与模型完全匹配
+model.load_state_dict(state_dict, strict=False) 
+model.tie_weights()    # 输入/输出层权重共享的关键方法，通过减少参数冗余提升模型效率; 通常是输入和输出的嵌入层（embedding layers）共享参数
+
+
+##### step3: 加载数据和切词
 from datasets import load_dataset, concatenate_datasets
 import torch
 import math

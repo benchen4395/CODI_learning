@@ -180,7 +180,7 @@ class CODI(torch.nn.Module):
         )  # 虚拟值 dummy values for mem tokens
 
         self.dim = self.codi.config.hidden_size         # 1024
-        self.num_latent = training_args.num_latent      # laten token numbers
+        self.num_latent = training_args.num_latent      # laten token numbers, 6
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, use_fast=False)
 
         # LoRA
@@ -239,11 +239,13 @@ class CODI(torch.nn.Module):
                 return model.get_base_model().gpt_neox.embed_in
             elif "gpt2" in model_name:
                 try:
-                    # get_base_model(): 当模型被封装（如使用 LoRA、Adapter 等微调技术）时，此方法剥离附加的适配层，返回原始基础模型结构
+                    # get_base_model(): 当模型被封装（如使用 LoRA、Adapter 等微调技术）时，此方法剥离附加的适配层，返回的是未经LoRA修改的原始权重
                     # .transformer.wte: 获取基础模型（Base Model）的词嵌入层（Word Token Embeddings）
                     # 仅适用于 GPT、LLaMA 等 Decoder-only 架构；Encoder-only 模型（如 BERT）的嵌入层通常命名为 embeddings.word_embeddings
                     return model.get_base_model().transformer.wte
                 except Exception: # no lora
+                    # 直接访问当前模型中的词嵌入层（Word Token Embeddings）。若模型应用了LoRA适配器，该属性可能被LoRA修改
+                    # 
                     return model.transformer.wte
             else:
                 try:
