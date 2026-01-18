@@ -42,6 +42,22 @@ if lora_init: # True
 else:
     raise NotImplementedError
 
+def print_trainable_parameters(model):
+    trainable_parameters = 0
+    all_param = 0
+    for name, param in model.named_parameters():
+        print('the name is: {}, the param is: {}'.format(name, param.shape))
+        all_param += param.numel()
+        if param.requires_grad:
+            trainable_parameters += param.numel()
+    print(
+        f"trainable params: {trainable_parameters} || all params: {all_param} || trainable%: {100 * trainable_parameters / all_param}"
+    )
+    # for name, param in model.named_parameters():
+    #     if param.requires_grad:
+    #         print('the require_grad name is: {}, and the param shape is: {}'.format(name, param.shape))
+
+
 model = transformers.AutoModelForCausalLM.from_pretrained(
             pretrained_model,
             torch_dtype=(       # 注意：当使用量化时，相同参数影响的数据类型可能会被覆盖，因为量化有自己的数据类型设置, 优先级没有bnb_4bit_compute_dtype高
@@ -266,6 +282,4 @@ for i in range(gen_kwargs["max_new_tokens"]):       # 256
     if finished.all():
         break
     output = model_get_embd(model, 'gpt2')(next_token_ids).unsqueeze(1).to(device)  # (128, 1, 768)
-
-
 

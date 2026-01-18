@@ -119,7 +119,8 @@ class TrainingArguments(transformers.TrainingArguments):
 def print_trainable_parameters(model):
     trainable_parameters = 0
     all_param = 0
-    for _, param in model.named_parameters():
+    for name, param in model.named_parameters():
+        print('the name is: {}, the param is: {}'.format(name, param.shape))
         all_param += param.numel()
         if param.requires_grad:
             trainable_parameters += param.numel()
@@ -128,7 +129,7 @@ def print_trainable_parameters(model):
     )
     # for name, param in model.named_parameters():
     #     if param.requires_grad:
-    #         print(name, param.shape)
+    #         print('the require_grad name is: {}, and the param shape is: {}'.format(name, param.shape))
 
 
 def freeze_model(model):
