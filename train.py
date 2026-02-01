@@ -339,7 +339,7 @@ def train():
                     
                     # avoid OOM: remove very long data
                     token_num = len(tokenizer.encode(question + " " + cot + " " + answer))
-                    if token_num > training_args./3: 
+                    if token_num > training_args.max_token_num/3: 
                         continue
                     questions.append(question)
                     cots.append(cot)
