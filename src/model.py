@@ -148,7 +148,7 @@ class CODI(torch.nn.Module):
         self.model_args = model_args
         self.training_args = training_args
         self.model_name = model_args.model_name_or_path
-        if model_args.full_precision:       # 是否开启int4量化
+        if model_args.full_precision:       # 是否开启int4加载
             self.codi = AutoModelForCausalLM.from_pretrained(
                     self.model_name,
                     torch_dtype=(
@@ -249,10 +249,11 @@ class CODI(torch.nn.Module):
                     # get_base_model(): 当模型被封装（如使用 LoRA、Adapter 等微调技术）时，此方法剥离附加的适配层，返回的是未经LoRA修改的原始权重
                     # .transformer.wte: 获取基础模型（Base Model）的词嵌入层（Word Token Embeddings）
                     # 仅适用于 GPT、LLaMA 等 Decoder-only 架构；Encoder-only 模型（如 BERT）的嵌入层通常命名为 embeddings.word_embeddings
+                    print('-- the model is splited')
                     return model.get_base_model().transformer.wte
                 except Exception: # no lora
                     # 直接访问当前模型中的词嵌入层（Word Token Embeddings）。若模型应用了LoRA适配器，该属性可能被LoRA修改
-                    # 
+                    print('-- the model is unified')
                     return model.transformer.wte
             else:
                 try:
@@ -279,39 +280,43 @@ class CODI(torch.nn.Module):
 
     def forward(
         self,
-        encoder_input_ids: torch.LongTensor = None,
-        decoder_input_ids: torch.LongTensor = None,
-        ref_input_ids: torch.LongTensor = None,
-        labels: Optional[torch.LongTensor] = None,
-        encoder_attention_mask: Optional[torch.LongTensor] = None,
-        ref_answer_position: Optional[torch.LongTensor] = None,
-        model_answer_position: Optional[torch.LongTensor] = None,
-        ref_attention_mask: Optional[torch.LongTensor] = None,
-        ref_labels: torch.LongTensor = None,
+        encoder_input_ids: torch.LongTensor = None,     # [padding] + querstion_id + bot_id -> longest length
+        decoder_input_ids: torch.LongTensor = None,     # eot_id + answer_id + eos_id + [padding] -> longest length
+        ref_input_ids: torch.LongTensor = None,         # question_id + cot_id + answer_id + eos_id + [padding] -> longest length
+        labels: Optional[torch.LongTensor] = None,      # eot_id + answer_id + eos_id + [-100] -> longest length
+        encoder_attention_mask: Optional[torch.LongTensor] = None,  # encoder_input_ids中非pad: [[False] + [True]] -> longest length
+        ref_answer_position: Optional[torch.LongTensor] = None,     # ref_input_ids中答案对应的开始位置
+        model_answer_position: Optional[torch.LongTensor] = None,   # labels (eot_id + answer_id + eos_id)中答案对应的开始位置
+        ref_attention_mask: Optional[torch.LongTensor] = None,  # ref_input_ids的非pad: [[True] + [False]] -> longest length
+        ref_labels: torch.LongTensor = None,                    # [-100] + cot_id + answer_id + eos_id + [-100]
         step: int = None,
         step_ratio: float = None
     ):
-        if not self.fix_attn_mask:
+        if not self.fix_attn_mask:      # True
             ref_attention_mask = None
         
         # Encode the question
         past_key_values = None
+        # encoder_input_ids: [padding] + question_id + bot_id -> longest length
+        # encoder_input_ids的非pad_token_id: [[False] + [True]] -> longest length
         outputs = self.codi(input_ids=encoder_input_ids, use_cache=True, output_hidden_states=True, past_key_values=past_key_values, attention_mask=encoder_attention_mask)
         past_key_values = outputs.past_key_values
-        latent_embd = outputs.hidden_states[-1][:, -1, :].unsqueeze(1) # as the next input
+        latent_embd = outputs.hidden_states[-1][:, -1, :].unsqueeze(1) # as the next input  [128, 1, 768]
         if self.use_prj:
-            latent_embd = self.prj(latent_embd)
+            latent_embd = self.prj(latent_embd)     # [128, 1, 768]
 
         len_pred_loss = 0
         dynamic_mask = None
-        if self.fix_attn_mask:
+        if self.fix_attn_mask:  # False
             dynamic_mask = torch.ones((encoder_attention_mask.size(0), self.num_latent), device=ref_labels.device)
 
         # Iterate over the latent embeddings
         distill_loss_total = 0
         ce_loss_total = 0
 
-        with torch.no_grad():
+        # ref_input_ids:  question_id + cot_id + answer_id + eos_id + [padding] -> longest length
+        # ref_attention_mask: [[True] + [False]] -> longest length
+        with torch.no_grad():   # 在 torch.no_grad() 上下文中，禁用梯度计算
             ref_outputs = self.codi(input_ids=ref_input_ids, output_hidden_states=True, attention_mask=ref_attention_mask)
         ref_outputs_with_grad = self.codi(input_ids=ref_input_ids, output_hidden_states=True, attention_mask=ref_attention_mask) 
         
@@ -326,7 +331,7 @@ class CODI(torch.nn.Module):
             ref_answer_position = ref_answer_position + 1
        
         # For DEBUG: Print the probability of the teacher task to predict the correct answer
-        if self.training_args.print_ref_model_stats:
+        if self.training_args.print_ref_model_stats:    # false
             for i, (ref_inputs, ref_outputs) in enumerate(zip(ref_input_ids, ref_outputs_list)):
                 # evalutae the reference model
                 if len(ref_outputs_list) > 1:
@@ -358,6 +363,7 @@ class CODI(torch.nn.Module):
                 # Calculate the distillation loss
                 if i == num_latent - 1: # the last latent embedding
                     # Decode the final answer in natural language
+                    # decoder_input_ids: eot_id + answer_id + eos_id + [padding] -> longest length
                     embds = self.get_embd(self.codi, self.model_name)(decoder_input_ids)
                   
                     if dynamic_mask is not None: # Prevent attending the paddings
@@ -379,7 +385,7 @@ class CODI(torch.nn.Module):
                         
                         if self.distill_loss_div_std:
                             if self.distill_loss_type == 'l2':
-                                distill_loss_tmp /= ref_selected.std()
+                                distill_loss_tmp /= ref_selected.std()  # 因为是l2，所以除两遍
                             distill_loss_tmp /= ref_selected.std()
                         distill_loss += distill_loss_tmp
                     
@@ -392,10 +398,10 @@ class CODI(torch.nn.Module):
 
                     # Calculate the CE loss for the student task
                     if i == num_latent - 1:
-                        logits = outputs.logits
-                        effective_logits = logits[:, :-1, :]
-                        effective_logits = effective_logits.reshape(-1, logits.size(-1))
-                        target_ids = labels[:, 1:].reshape(-1)                        
+                        logits = outputs.logits                     # [128, 10, 50260]
+                        effective_logits = logits[:, :-1, :]        # answer_id + eos_id + [padding] -> [128, 9, 50260]
+                        effective_logits = effective_logits.reshape(-1, logits.size(-1))        # [1152, 50260]
+                        target_ids = labels[:, 1:].reshape(-1)      # answer_id + eos_id + [-100] -> [1152]           
                         ce_loss = self.loss_fct(effective_logits, target_ids)
                         ce_loss_total += ce_loss
 
@@ -418,6 +424,8 @@ class CODI(torch.nn.Module):
         loss = ce_loss_total + distill_loss_total + ref_ce_loss
         
         if ce_loss_total != 0:
+            # detach: 将张量从计算图中分离，使其不再需要梯度计算（requires_grad=False）
+            # 将0维张量（标量张量）转换为Python基本数据类型（如 int、float）; 只能用于1个元素的张量（torch.Size([])）。若张量包含多个元素，会抛出 RuntimeError
             ce_loss_total = ce_loss_total.detach().item()
         if distill_loss_total != 0:
             distill_loss_total = distill_loss_total.detach().item()
