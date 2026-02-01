@@ -71,7 +71,7 @@ class CustomTrainer(Trainer):
             for k, v in logs.items():
                 super().log({k: v})
 
-def _tokenize_fn(strings: Sequence[str], tokenizer: transformers.PreTrainedTokenizer) -> Dict:
+def _tokenize_fn(strings: Sequence[str], tokenizer: transformers.PreTrainedTokenizer, training_args) -> Dict:
     """Tokenize a list of strings."""
     tokenized_list = [
         tokenizer(
@@ -186,9 +186,9 @@ def train():
         eot_id: int,
     ) -> Dict:
         print("Step 2.2 For data preprocess. Tokenizing inputs... This may take some time...")
-        sources_id = _tokenize_fn(sources, tokenizer)["input_ids"]
-        cot_id = _tokenize_fn(targets, tokenizer)["input_ids"]
-        answers_id = _tokenize_fn(answers, tokenizer)["input_ids"]
+        sources_id = _tokenize_fn(sources, tokenizer, training_args)["input_ids"]
+        cot_id = _tokenize_fn(targets, tokenizer, training_args)["input_ids"]
+        answers_id = _tokenize_fn(answers, tokenizer, training_args)["input_ids"]
 
         print("Step 2.3 For data preprocess. Format the inputs.")
         # add eos token to accomodate pretrained model's format
